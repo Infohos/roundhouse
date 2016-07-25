@@ -13,7 +13,10 @@ namespace roundhouse.databases.ravendb.commands
 
         public RavenCommand()
         {
-            _webClient = new WebClient();
+            _webClient = new WebClient
+            {
+                UseDefaultCredentials = true
+            };
         }
 
         public void Dispose()
