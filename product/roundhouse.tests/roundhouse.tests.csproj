@@ -37,14 +37,11 @@
     <PackageReference Include="structuremap" version="4.5.2" />
     <PackageReference Include="StructureMap" Version="4.5.2" />
     <PackageReference Include="TinySpec.NUnit" version="0.9.5" />
-    <ProjectReference Include="..\roundhouse.databases.ravendb\roundhouse.databases.ravendb.csproj">
-      <Project>{57ead027-d5c6-4f81-b4ec-4da926471ca2}</Project>
-      <Name>roundhouse.databases.ravendb</Name>
-    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\roundhouse.databases.access\roundhouse.databases.access.csproj" />
     <ProjectReference Include="..\roundhouse.databases.oracle\roundhouse.databases.oracle.csproj" />
+	<ProjectReference Include="..\roundhouse.databases.ravendb\roundhouse.databases.ravendb.csproj" />
     <ProjectReference Include="..\roundhouse.databases.sqlserver\roundhouse.databases.sqlserver.csproj" />
     <ProjectReference Include="..\roundhouse\roundhouse.csproj" />
   </ItemGroup>
