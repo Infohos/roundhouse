@@ -1,18 +1,14 @@
-using System.Threading;
-
 namespace roundhouse
 {
     using System;
     using folders;
     using infrastructure.app;
-    using infrastructure.app.logging;
     using infrastructure.containers;
     using infrastructure.filesystem;
     using infrastructure.logging;
     using migrators;
     using resolvers;
     using runners;
-    using Environment = roundhouse.environments.Environment;
 
     public class Migrate
     {
@@ -54,22 +50,8 @@ namespace roundhouse
         /// </summary>
         public void Run()
         {
-            ApplicationConfiguraton.set_defaults_if_properties_are_not_set(configuration);
-            ApplicationConfiguraton.build_the_container(configuration);
-
-            RoundhouseMigrationRunner migrator = new RoundhouseMigrationRunner(
-               configuration.RepositoryPath,
-               Container.get_an_instance_of<Environment>(),
-               Container.get_an_instance_of<KnownFolders>(),
-               Container.get_an_instance_of<FileSystemAccess>(),
-               Container.get_an_instance_of<DatabaseMigrator>(),
-               Container.get_an_instance_of<VersionResolver>(),
-               configuration.Silent,
-               configuration.Drop,
-               configuration.DoNotCreateDatabase,
-               configuration.WithTransaction,
-               configuration.RecoveryModeSimple,
-               configuration);
+            RoundhouseMigrationRunner migrator = GetMigrationRunner();
+               
 
             migrator.run();
         }
@@ -97,6 +79,44 @@ namespace roundhouse
             if (string.IsNullOrEmpty(configuration.RestoreFromPath)) throw new ApplicationException("You must set RestoreFromPath in the configuration.");
 
             Run();
+        }
+
+        /// <summary>
+        /// Call this method to find out if there are any new or changed scripts that would be executed when the Run-method is called.
+        /// </summary>
+        public bool IsDbUpToDate()
+        {
+            RoundhouseMigrationRunner migrationRunner = GetMigrationRunner();
+
+            RoundhouseUpdateCheckRunner updateCheckRunner = new RoundhouseUpdateCheckRunner(
+                Container.get_an_instance_of<environments.EnvironmentSet>(),
+                Container.get_an_instance_of<KnownFolders>(),
+                Container.get_an_instance_of<FileSystemAccess>(),
+                Container.get_an_instance_of<DatabaseMigrator>(),
+                configuration,
+                migrationRunner);
+
+            return updateCheckRunner.is_database_up_to_date();
+        }
+
+
+        private RoundhouseMigrationRunner GetMigrationRunner()
+        {
+            ApplicationConfiguraton.set_defaults_if_properties_are_not_set(this.configuration);
+            ApplicationConfiguraton.build_the_container(this.configuration);
+
+            return new RoundhouseMigrationRunner(
+                this.configuration.RepositoryPath,
+                Container.get_an_instance_of<environments.EnvironmentSet>(),
+                Container.get_an_instance_of<KnownFolders>(),
+                Container.get_an_instance_of<FileSystemAccess>(),
+                Container.get_an_instance_of<DatabaseMigrator>(),
+                Container.get_an_instance_of<VersionResolver>(),
+                this.configuration.Silent,
+                this.configuration.Drop,
+                this.configuration.DoNotCreateDatabase,
+                this.configuration.WithTransaction,
+                this.configuration);
         }
 
     }

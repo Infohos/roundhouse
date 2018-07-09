@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Linq;
+using roundhouse.environments;
 
 namespace roundhouse.migrators
 {
@@ -11,6 +13,7 @@ namespace roundhouse.migrators
     using infrastructure.logging;
     using sqlsplitters;
     using Environment = roundhouse.environments.Environment;
+    using System.Linq;
 
     public sealed class DefaultDatabaseMigrator : DatabaseMigrator
     {
@@ -22,8 +25,11 @@ namespace roundhouse.migrators
         private readonly string custom_restore_options;
         private readonly string output_path;
         private readonly bool error_on_one_time_script_changes;
+        private readonly bool ignore_one_time_script_changes;
         private bool running_in_a_transaction;
         private readonly bool is_running_all_any_time_scripts;
+        private readonly bool is_baseline;
+        private readonly bool is_dryrun;
 
         public DefaultDatabaseMigrator(Database database, CryptographicService crypto_provider, ConfigurationPropertyHolder configuration)
         {
@@ -34,8 +40,11 @@ namespace roundhouse.migrators
             restore_path = configuration.RestoreFromPath;
             custom_restore_options = configuration.RestoreCustomOptions;
             output_path = configuration.OutputPath;
-            error_on_one_time_script_changes = !configuration.WarnOnOneTimeScriptChanges;
+            error_on_one_time_script_changes = !configuration.WarnOnOneTimeScriptChanges && !configuration.WarnAndIgnoreOnOneTimeScriptChanges;
+            ignore_one_time_script_changes = configuration.WarnAndIgnoreOnOneTimeScriptChanges;
             is_running_all_any_time_scripts = configuration.RunAllAnyTimeScripts;
+            is_baseline = configuration.Baseline;
+            is_dryrun = configuration.DryRun;
         }
 
         public void initialize_connections()
@@ -107,7 +116,7 @@ namespace roundhouse.migrators
         public void set_recovery_mode(bool simple)
         {
             //database.open_connection(false);
-            Log.bound_to(this).log_an_info_event_containing("Setting recovery mode to '{0}' for database {1}.", simple ? "Simple":"Full", database.database_name );
+            Log.bound_to(this).log_an_info_event_containing("Setting recovery mode to '{0}' for database {1}.", simple ? "Simple" : "Full", database.database_name);
             database.set_recovery_mode(simple);
             //database.close_connection();
         }
@@ -159,9 +168,10 @@ namespace roundhouse.migrators
             return database.insert_version_and_get_version_id(repository_path, repository_version);
         }
 
-        public bool run_sql(string sql_to_run, string script_name, bool run_this_script_once, bool run_this_script_every_time, long version_id, Environment environment, string repository_version, string repository_path, ConnectionType connection_type)
+        public bool run_sql(string sql_to_run, string script_name, bool run_this_script_once, bool run_this_script_every_time, long version_id, EnvironmentSet environment_set, string repository_version, string repository_path, ConnectionType connection_type)
         {
             bool this_sql_ran = false;
+            bool skip_run = is_baseline;
 
             if (this_is_a_one_time_script_that_has_changes_but_has_already_been_run(script_name, sql_to_run, run_this_script_once))
             {
@@ -173,32 +183,51 @@ namespace roundhouse.migrators
                     database.close_connection();
                     throw new Exception(error_message);
                 }
+                if (ignore_one_time_script_changes)
+                {
+                    skip_run = true;
+                }
                 Log.bound_to(this).log_a_warning_event_containing("{0} is a one time script that has changed since it was run.", script_name);
             }
 
-            if (this_is_an_environment_file_and_its_in_the_right_environment(script_name, environment)
+            if (this_is_an_environment_file_and_its_in_the_right_environment(script_name, environment_set)
                 && this_script_should_run(script_name, sql_to_run, run_this_script_once, run_this_script_every_time))
             {
-                Log.bound_to(this).log_an_info_event_containing(" Running {0} on {1} - {2}.", script_name, database.server_name, database.database_name);
-
-                foreach (var sql_statement in get_statements_to_run(sql_to_run))
+                if (!is_dryrun)
                 {
-                    try
+                    Log.bound_to(this).log_an_info_event_containing(" {3} {0} on {1} - {2}.", script_name, database.server_name, database.database_name,
+                                            skip_run ? "BASELINING: Recording" : "Running");
+                }
+                if (!skip_run)
+                {
+                    if (!is_dryrun)
                     {
-                        database.run_sql(sql_statement, connection_type);
+                        foreach (var sql_statement in get_statements_to_run(sql_to_run))
+                        {
+                            try
+                            {
+                                database.run_sql(sql_statement, connection_type);
+                            }
+                            catch (Exception ex)
+                            {
+                                database.rollback();
+
+                                record_script_in_scripts_run_errors_table(script_name, sql_to_run, sql_statement, ex.Message, repository_version, repository_path);
+                                database.close_connection();
+                                throw;
+                            }
+                        }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Log.bound_to(this).log_an_error_event_containing("Error executing file '{0}': statement running was '{1}'", script_name, sql_statement);
-                        database.rollback();
-                        
-                        record_script_in_scripts_run_errors_table(script_name, sql_to_run, sql_statement, ex.Message, repository_version, repository_path);
-                        database.close_connection();
-                        throw;
+                        Log.bound_to(this).log_a_warning_event_containing(" DryRun: {0} on {1} - {2}.", script_name, database.server_name, database.database_name);
                     }
                 }
-                record_script_in_scripts_run_table(script_name, sql_to_run, run_this_script_once, version_id);
-                this_sql_ran = true;
+                if (!is_dryrun)
+                {
+                    record_script_in_scripts_run_table(script_name, sql_to_run, run_this_script_once, version_id);
+                    this_sql_ran = true;
+                }
             }
             else
             {
@@ -230,7 +259,7 @@ namespace roundhouse.migrators
         public void record_script_in_scripts_run_table(string script_name, string sql_to_run, bool run_this_script_once, long version_id)
         {
             Log.bound_to(this).log_a_debug_event_containing("Recording {0} script ran on {1} - {2}.", script_name, database.server_name, database.database_name);
-            database.insert_script_run(script_name, sql_to_run, create_hash(sql_to_run), run_this_script_once, version_id);
+            database.insert_script_run(script_name, sql_to_run, create_hash(sql_to_run, true), run_this_script_once, version_id);
         }
 
         public void record_script_in_scripts_run_errors_table(string script_name, string sql_to_run, string sql_erroneous_part, string error_message, string repository_version, string repository_path)
@@ -239,9 +268,12 @@ namespace roundhouse.migrators
             database.insert_script_run_error(script_name, sql_to_run, sql_erroneous_part, error_message, repository_version, repository_path);
         }
 
-        private string create_hash(string sql_to_run)
+        private string create_hash(string sql_to_run, bool normalizeEndings)
         {
-            return crypto_provider.hash(sql_to_run.Replace(@"'", @"''"));
+            var input = sql_to_run.Replace(@"'", @"''");
+            if (normalizeEndings)
+                input = input.Replace(WindowsLineEnding, UnixLineEnding).Replace(MacLineEnding, UnixLineEnding);
+            return crypto_provider.hash(input);
         }
 
         public bool this_is_an_every_time_script(string script_name, bool run_this_script_every_time)
@@ -278,28 +310,56 @@ namespace roundhouse.migrators
 
         private bool this_script_has_changed_since_last_run(string script_name, string sql_to_run)
         {
-            bool hash_is_same = false;
-
             string old_text_hash = string.Empty;
             try
             {
                 old_text_hash = database.get_current_script_hash(script_name);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                Log.bound_to(this).log_a_warning_event_containing("{0} - I didn't find this script executed before.", script_name);
+                Log.bound_to(this).log_a_warning_event_containing("{0} - I didn't find this script executed before.{1}{2}", script_name, System.Environment.NewLine, ex.to_string());
             }
 
             if (string.IsNullOrEmpty(old_text_hash)) return true;
 
-            string new_text_hash = create_hash(sql_to_run);
 
-            if (string.Compare(old_text_hash, new_text_hash, true) == 0)
+            // These check hashes from before the normalization change and after
+            // The change does result in a different hash that will not be the result of
+            // any sore of file change and therefore should not be logged.
+            bool hash_is_same = 
+                hashes_are_equal(create_hash(sql_to_run, true), old_text_hash) ||   // New hash
+                hashes_are_equal(create_hash(sql_to_run, false), old_text_hash);    // Old hash
+
+            if (!hash_is_same)
             {
-                hash_is_same = true;
+                // extra checks if only line endings have changed
+                hash_is_same = have_same_hash_ignoring_platform(sql_to_run, old_text_hash);
+                if (hash_is_same)
+                {
+                    Log.bound_to(this).log_a_warning_event_containing("Script {0} had different line endings than before but equal content", script_name);
+                }
             }
 
             return !hash_is_same;
+        }
+
+        private bool hashes_are_equal(string new_text_hash, string old_text_hash)
+        {
+            return string.Compare(old_text_hash, new_text_hash, true) == 0;
+        }
+
+        private const string WindowsLineEnding = "\r\n";
+        private const string UnixLineEnding = "\n";
+        private const string MacLineEnding = "\r";
+
+        private bool have_same_hash_ignoring_platform(string sql_to_run, string old_text_hash)
+        {
+            var lineEndingVariations = new List<string> {WindowsLineEnding, UnixLineEnding, MacLineEnding};
+
+            return lineEndingVariations.Any(variation => {
+                var normalized_sql = lineEndingVariations.Aggregate(sql_to_run, (norm, ending) => norm.Replace(ending, variation));
+                return hashes_are_equal(create_hash(normalized_sql, false), old_text_hash);
+            });
         }
 
         private bool this_script_should_run(string script_name, string sql_to_run, bool run_this_script_once, bool run_this_script_every_time)
@@ -319,33 +379,38 @@ namespace roundhouse.migrators
             {
                 return false;
             }
-            
+
             return true;
         }
 
-        public bool this_is_an_environment_file_and_its_in_the_right_environment(string script_name, Environment environment)
+        public bool this_script_is_new_or_updated(string script_name, string sql_to_run, EnvironmentSet environment_set)
         {
-            Log.bound_to(this).log_a_debug_event_containing("Checking to see if {0} is an environment file. We are in the {1} environment.", script_name, environment.name);
+            if (!this_is_an_environment_file_and_its_in_the_right_environment(script_name, environment_set))
+                return false;
+
+            if (this_script_has_run_already(script_name)
+                   && !this_script_has_changed_since_last_run(script_name, sql_to_run))
+                return false;
+
+            return true;
+        }
+
+        public bool this_is_an_environment_file_and_its_in_the_right_environment(string script_name, EnvironmentSet environment_set)
+        {
+            string environment_set_names = string.Join(", ", environment_set.set_items.Select(x => x.name));
+
+            Log.bound_to(this).log_a_debug_event_containing("Checking to see if {0} is an environment file. We have an environment set containing: .", script_name, environment_set_names);
+
             if (!script_name.to_lower().Contains(".env."))
             {
                 // return true because this is NOT an environment file for the next check
                 return true;
             }
 
-            bool environment_file_is_in_the_right_environment = false;
+            bool environment_file_is_in_the_right_environment = environment_set.item_is_for_this_environment_set(script_name);
 
-            if (script_name.to_lower().StartsWith(environment.name.to_lower() + "."))
-            {
-                environment_file_is_in_the_right_environment = true;
-            }
-
-            if (script_name.to_lower().Contains("." + environment.name.to_lower() + "."))
-            {
-                environment_file_is_in_the_right_environment = true;
-            }
-
-            Log.bound_to(this).log_an_info_event_containing(" {0} is an environment file. We are in the {1} environment. This will{2} run based on this check.",
-                                                            script_name, environment.name, environment_file_is_in_the_right_environment ? string.Empty : " NOT");
+            Log.bound_to(this).log_an_info_event_containing(" {0} is an environment file. We have an environment set containing: {1}. This will{2} run based on this check.",
+                                                            script_name, environment_set_names, environment_file_is_in_the_right_environment ? string.Empty : " NOT");
 
             return environment_file_is_in_the_right_environment;
         }

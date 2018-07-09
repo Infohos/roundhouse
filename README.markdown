@@ -8,12 +8,39 @@ Apache 2.0 - see docs\legal (just LEGAL in the zip folder)
 # Documentation
 [WIKI](https://github.com/chucknorris/roundhouse/wiki)  
   
+# 1.0.0 Release Candidates are Out! Help us test!
+We are releasing a cross-platform, .NET core version of RoundhousE. We are calling this release 1.0.0 and need your help to test it. Switch the
+branch over to the 1.0.0 branch and the instructions for the new version will be waiting.
+
+To get this new build, for the Nuget packages, please add the following to you nuget sources: 
+[https://www.myget.org/F/roundhouse/api/v3/index.json](https://www.myget.org/F/roundhouse/api/v3/index.json)
+
+This can be done via your favourite IDE, e.g. Visual Studio, or via the command-line:
+
+```
+nuget sources add -Name Roundhouse-Myget -Source https://www.myget.org/F/roundhouse/api/v3/index.json
+```
+
+Be sure to enable _Preview versions_ when browsing for the packages, if not, they will not show up in your feed.
+
+For the command line, before the release is final, and we push to Chocolatey (and hopefully some other package managers, like `apt-get` in the future), the easiest way to get the command-line version, would be off the [build server](https://ci.appveyor.com/project/chucknorris/roundhouse/build/artifacts). If you would like to help us test the .net core version, please download the `.tar.gz` file, and use on an OS of choice (Windows, macOS, Linux). Dotnet core is required.
+
+
+# UNDER CONSTRUCTION
+Pardon our mess while we modernize the dependencies and build system. There's clean up underway.
+To work with the latest code, pull master and run **build.ps1** in your directory (or open project in Visual Studio 2017)
+
+To work with the command line, you will need the following in your path:
+ - MS Build
+ - GitVersion (easiest to run choco install gitversion.portable. You are running choclately aren't you?)
+ - NuGet Command Line (easiest to run choco install nuget.commandline. You are running choclately aren't you?)
+
 # IMPORTANT
 NOTE: If you are looking at the source - please run build.bat before opening the solution. It creates the SolutionVersion.cs file that is necessary for a successful build.
 
 # INFO
 ## Overview
-RoundhousE is an automated database deployment (change management) system that allows you to use your current idioms and gain much more. Currently it only supports Microsoft SQL Server, but there are future plans for other databases.  
+RoundhousE is an automated database deployment (change management) system that allows you to use your current idioms and gain much more. Currently works with Oracle, SQL Server (2000/2005/2008/Express), Access, MySQL, SQLite and PostgreSQL.There are future plans for other databases.  
   
 It seeks to solve both maintenance concerns and ease of deployment. We follow some of the same idioms as other database management systems (SQL scripts), but we are different in that we think about future maintenance concerns. We want to always apply certain scripts (anything stateless like functions, views, stored procedures, and permissions), so we don't have to throw everything into our change scripts. This seeks to solves future source control concerns. How sweet is it when you can version the database according to your current source control version?  
   
@@ -23,7 +50,7 @@ It seeks to solve both maintenance concerns and ease of deployment. We follow so
 
  You can also obtain a copy from the build server at [http://teamcity.codebetter.com](http://teamcity.codebetter.com).  
   
-### Gems  
+### Gems (_Not updated for 0.9.0, sorry_) 
 If you have Ruby 1.8.6+ (and Gems 1.3.7+) installed, you can get the current release of RoundhousE to your machine quickly!  
   
 1. Type `gem install roundhouse`  
@@ -36,7 +63,7 @@ With NuGet you can get the current release of RoundhousE to your application qui
 2. There is also `roundhouse.lib`, `roundhouse.msbuild`, and `roundhouse.refreshdatabase`  
   
 ### Chocolatey  
-Chocolatey like apt-get, but for Windows! This is an alternative method to get the current release of RoundhousE to your machine quickly!  
+Chocolatey is like apt-get, but for Windows! This is an alternative method to get the current release of RoundhousE to your machine quickly!  
   
 1. Type `cinst roundhouse`  
 2. Then from anywhere you can type `rh [options]`  
@@ -53,15 +80,88 @@ This is the best way to get to the bleeding edge of what we are doing.
   
   
 # REQUIREMENTS
-* .NET Framework 3.5  
+* .NET Framework 4.6.1
 * SA access to the sql server (for creation or deletion)  
 * change access to the database (for everything else)  
 
 # DONATE
 Donations Accepted - If you enjoy using this product or it has saved you time and money in some way, please consider making a donation.  
-It helps keep to the product updated, pays for site hosting, etc. https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=9831498
+It helps keep to the product updated, pays for site hosting, etc. https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=2RA38UKSK6EZU
 
 # RELEASE NOTES
+## [0.9.1](https://github.com/chucknorris/roundhouse/releases/tag/0.9.1)
+ **Two Bugfixes**
+
+After the 0.9.0 release, users identifed two significant bugs. These are fixed in a quick point release.
+
+ (See release for the full release notes)
+
+## [0.9.0](https://github.com/chucknorris/roundhouse/releases/tag/0.9.0)
+ **Focus on modernising tooling**
+
+ RoundhousE has had some catching-up to do tooling-wise. Dependency on .NET 3.5, old, NAnt-based build chain, etc. We are starting this work. It is not done yet, but on its way. Feature-wise not a lot to brag about, but RH.exe should now be able to run on Windows Server 2016 out-of-the-box, because it is no longer dependent on .NET 3.5.
+
+ (See release for the full release notes)
+
+## [0.8.8](https://github.com/chucknorris/roundhouse/releases/tag/0.8.8)
+ **Catching up with Pull Requests**
+ (See release for the release notes)
+
+## [0.8.7](https://github.com/chucknorris/roundhouse/releases/tag/0.8.7)
+ **OMG!! It's a RoundhousE release!!**
+
+ *It's been a long time coming. I didn't want to get bogged down into writing 
+ the perfect release notes, so I am summarizing the last four years of commit 
+ history. I hope that no one that contributed feels slighted by my failure to 
+ specifically acknowledge your contribution. I intend to do better in the 
+ future.*
+
+### Enhancements
+ + Added option to run scripts outside of transaction scope
+ + Handle Azure connection strings
+ + Properly split files that start with a splitter
+ + Respect Transaction flag
+ + Improved Logging
+ + Added switch --warnandignoreononetimescriptchanges
+
+### Bug Fixes
+ + Only retry on SQL Connection errors
+ + Correctly handle postgres connection disposed error
+
+## 0.8.6
+
+### Enhancements
+
+  + Use git as official repository. (mpareja)
+  + Upgrade UpperCut to version 1.4.2. (ferventcoder)
+  + Database Restore: use restore specific timeout value. (icetoast - [pull #90](https://github.com/chucknorris/roundhouse/pull/90))
+  + Ignore EOL format changes when detecting script changes. (lahma - [pull #104](https://github.com/chucknorris/roundhouse/pull/104))
+  + Include SQL Print statements in debug log. (ferventcoder - [issue #68](https://github.com/chucknorris/roundhouse/issues/68))
+  + Include statement being run in log when an error occurs. (ferventcoder - [issue #66](https://github.com/chucknorris/roundhouse/issues/66))
+  + Added 'runBeforeUp' anytime directory. (cdrexle - [pull #51](https://github.com/chucknorris/roundhouse/pull/51))
+  + Support resolving version from a text file. (mpareja - [pull #50](https://github.com/chucknorris/roundhouse/pull/50), [pull #55](https://github.com/chucknorris/roundhouse/pull/55))
+  + Add option to turn off copying scripts into 'itemsRan' directory. (lahma - [pull #47](https://github.com/chucknorris/roundhouse/pull/47))
+  + WarnOnOneTimeScriptChange will now cause changed one-time scripts to be re-run. (BiggerNoise - [pull #35](https://github.com/chucknorris/roundhouse/pull/35))
+  + Upgrade NHibernate to version 3.3.2. (drusellers)
+  + Upgrade FubuCore, HtmlTags and StructureMap. (drusellers)
+
+### Bug Fixes
+
+  + SQL Batch Parser: handle training comments, single quotes. (mpareja - [pull #108](https://github.com/chucknorris/roundhouse/pull/108))
+  + SQL Batch Parser: fix hang. (AndersMalmgren - [pull #100](https://github.com/chucknorris/roundhouse/pull/100))
+  + Token Replacer: preserve case for unmatched tokens. (mpareja - [pull #65](https://github.com/chucknorris/roundhouse/pull/65))
+  + SQL scripts no longer truncated to 4000 characters. (charoco, ferventcoder - [pull #61](https://github.com/chucknorris/roundhouse/pull/61))
+  + Oracle: Fix handling of null values. (rdingwall - [pull #59](https://github.com/chucknorris/roundhouse/pull/59), [issue #58](https://github.com/chucknorris/roundhouse/issues/58))
+  + Script File Versioner: fix exception. (Michael Kobaly - [issue #68 on Google Code](https://code.google.com/p/roundhouse/issues/detail?id=68))
+  + Only change DB recovery mode if explicitly told to. (ferventcoder - [issue #69 on Google Code](https://code.google.com/p/roundhouse/issues/detail?id=69))
+  + Fixed the debug command line switch. (ferventcoder - [issue #40](https://github.com/chucknorris/roundhouse/issues/40))
+  + Ensure version 1.2.10 of log4net is used when installing NuGet packages. (ferventcoder - [issue #41](https://github.com/chucknorris/roundhouse/issues/41))
+  + Fix: Improve logging of RH exceptions. (torkelo - [pull #60](https://github.com/chucknorris/roundhouse/pull/60))
+
+### Breaking Changes
+
+  + RoundhousE will change the DB recover mode if the `recoverymode` mode option is explicitly set to `simple` or `full`. In the past, RoundhousE would default to `full` but would only ever set the recovery mode while creating/restoring the database. If you depended on RoundhousE to create/restore the database for you and you don't want the database server default to be used, you should specify the recovery mode option.
+
 ## 0.8.5  
 * FIX: KeyNotFoundException in NHibernateSessionFactoryBuilder. See [issue 59] (http://code.google.com/p/roundhouse/issues/detail?id=59) for details. (r361)  
 * **SQLite Support!**. See details https://github.com/chucknorris/roundhouse/issues/21 (r360)  

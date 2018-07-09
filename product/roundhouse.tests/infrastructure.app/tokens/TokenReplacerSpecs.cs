@@ -1,35 +1,39 @@
-using bdddoc.core;
-using developwithpassion.bdd.contexts;
-using developwithpassion.bdd.mbunit;
-using developwithpassion.bdd.mbunit.standard;
-using developwithpassion.bdd.mbunit.standard.observations;
+using System;
+using System.Collections.Generic;
 
 namespace roundhouse.tests.infrastructure.app.tokens
 {
-    using System;
     using consoles;
     using roundhouse.infrastructure.app;
     using roundhouse.infrastructure.app.tokens;
 
     public class TokenReplacerSpecs
     {
-        public abstract class concern_for_TokenReplacer : observations_for_a_static_sut
+        public abstract class concern_for_TokenReplacer : TinySpec
         {
             protected static object result;
             protected static ConfigurationPropertyHolder configuration;
             protected static string database_name = "BOB";
 
-            context c = () =>
+            public override void Context()
             {
-                configuration = new DefaultConfiguration { DatabaseName = database_name };
-            };
+                configuration = new DefaultConfiguration
+                {
+                    DatabaseName = database_name,
+                    UserTokens = new Dictionary<string,string>()
+                    {
+                        { "UserId", "123" },
+                        { "UserName", "Some Name" }
+                    }
+                };
+            }
         }
 
         [Concern(typeof(TokenReplacer))]
         public class when_replacing_tokens_in_sql_files_using_the_configuration : concern_for_TokenReplacer
         {
+            public override void Because() {}
 
-            because b = () => { };
 
             [Observation]
             public void if_given_bracket_bracket_DatabaseName_bracket_bracket_should_replace_with_the_DatabaseName_from_the_configuration()
@@ -49,13 +53,13 @@ namespace roundhouse.tests.infrastructure.app.tokens
                 TokenReplacer.replace_tokens(configuration, "ALTER DATABASE DatabaseName").should_be_equal_to("ALTER DATABASE DatabaseName");
             }
 
-            [Observation]
+            [Observation, CLSCompliant(false)]
             public void if_given_bracket_bracket_databasename_bracket_bracket_should_replace_with_the_DatabaseName_from_the_configuration()
             {
                 TokenReplacer.replace_tokens(configuration, "ALTER DATABASE {{databasename}}").should_be_equal_to("ALTER DATABASE " + database_name);
             }
 
-            [Observation]
+            [Observation, CLSCompliant(false)]
             public void if_given_bracket_bracket_DATABASENAME_bracket_bracket_should_replace_with_the_DatabaseName_from_the_configuration()
             {
                 TokenReplacer.replace_tokens(configuration, "ALTER DATABASE {{DATABASENAME}}").should_be_equal_to("ALTER DATABASE " + database_name);
@@ -78,6 +82,39 @@ namespace roundhouse.tests.infrastructure.app.tokens
             {
                 TokenReplacer.replace_tokens(configuration, "ALTER DATABASE {{DataBase}}").should_be_equal_to("ALTER DATABASE {{DataBase}}");
             }
+            [Observation]
+            public void if_given_userid_and_username_should_replace_with_the_user_tokens_from_the_configuration()
+            {
+                TokenReplacer.replace_tokens(configuration, "SELECT * FROM Users WHERE UserId = {{UserId}} OR UserName = '{{UserName}}'")
+                .should_be_equal_to("SELECT * FROM Users WHERE UserId = "+configuration.UserTokens["UserId"]+" OR UserName = '"+configuration.UserTokens["UserName"]+"'");
+            }
         }
+        [Concern(typeof(TokenReplacer))]
+        public class when_replacing_tokens_in_sql_files_using_user_tokens_from_configuration : TinySpec
+        {
+            protected static object result;
+            protected static ConfigurationPropertyHolder configuration;
+            
+            public override void Context()
+            {
+                configuration = new DefaultConfiguration
+                {
+                    UserTokens = new Dictionary<string,string>()
+                    {
+                        { "UserId", "123" },
+                        { "UserName", "Some Name" }
+                    }
+                };
+            }
+
+            public override void Because() {}
+    
+            [Observation]
+            public void if_given_bracket_bracket_DatabaseName_bracket_bracket_should_replace_with_the_DatabaseName_from_the_configuration()
+            {
+                TokenReplacer.replace_tokens(configuration, "SELECT * FROM Users WHERE UserId = {{UserId}} OR UserName = '{{UserName}}'")
+                .should_be_equal_to("SELECT * FROM Users WHERE UserId = " + configuration.UserTokens["UserId"] + " OR UserName = '" + configuration.UserTokens["UserName"] + "'");
+            }
+}
     }
 }

@@ -1,10 +1,13 @@
 using System.Collections.Generic;
+using System.Reflection;
 using log4net;
 using Microsoft.Build.Framework;
+using log4net.Core;
+using log4net.Repository;
+using ILogger = Microsoft.Build.Framework.ILogger;
 
 namespace roundhouse.infrastructure.app
 {
-    using System;
     using System.IO;
     using builders;
     using containers;
@@ -12,17 +15,17 @@ namespace roundhouse.infrastructure.app
     using cryptography;
     using databases;
     using environments;
-    using extensions;
     using filesystem;
     using folders;
     using infrastructure.logging;
     using infrastructure.logging.custom;
+    using init;
     using logging;
     using migrators;
     using resolvers;
     using StructureMap;
     using Container = roundhouse.infrastructure.containers.Container;
-    using Environment = roundhouse.environments.Environment;
+    using System.Linq;
 
     public static class ApplicationConfiguraton
     {
@@ -80,6 +83,10 @@ namespace roundhouse.infrastructure.app
             {
                 configuration_property_holder.SprocsFolderName = ApplicationParameters.default_sprocs_folder_name;
             }
+            if (string.IsNullOrEmpty(configuration_property_holder.TriggersFolderName))
+            {
+                configuration_property_holder.TriggersFolderName = ApplicationParameters.default_triggers_folder_name;
+            }
             if (string.IsNullOrEmpty(configuration_property_holder.IndexesFolderName))
             {
                 configuration_property_holder.IndexesFolderName = ApplicationParameters.default_indexes_folder_name;
@@ -116,9 +123,9 @@ namespace roundhouse.infrastructure.app
             {
                 configuration_property_holder.VersionXPath = ApplicationParameters.default_version_x_path;
             }
-            if (string.IsNullOrEmpty(configuration_property_holder.EnvironmentName))
+            if (!configuration_property_holder.EnvironmentNames.Any())
             {
-                configuration_property_holder.EnvironmentName = ApplicationParameters.default_environment_name;
+                configuration_property_holder.EnvironmentNames.Add(ApplicationParameters.default_environment_name);
             }
             if (string.IsNullOrEmpty(configuration_property_holder.OutputPath))
             {
@@ -136,10 +143,6 @@ namespace roundhouse.infrastructure.app
             {
                 configuration_property_holder.RestoreFromPath = Path.GetFullPath(configuration_property_holder.RestoreFromPath);
             }
-            if (configuration_property_holder.RecoveryModeSimple)
-            {
-                configuration_property_holder.RecoveryMode = RecoveryMode.Simple;
-            }
         }
 
         private static void set_up_current_mappings(ConfigurationPropertyHolder configuration_property_holder)
@@ -156,6 +159,7 @@ namespace roundhouse.infrastructure.app
             Container.initialize_with(null);
             Container.initialize_with(build_items_for_container(configuration_property_holder));
             initialize_file_log_appender();
+            set_logging_level_debug_when_debug(configuration_property_holder);
         }
 
         private static InversionContainer build_items_for_container(ConfigurationPropertyHolder configuration_property_holder)
@@ -166,10 +170,10 @@ namespace roundhouse.infrastructure.app
 
             Logger multiLogger = GetMultiLogger(configuration_property_holder);
 
-            ObjectFactory.Configure(cfg =>
+            var container = new StructureMap.Container(cfg =>
                                         {
                                             cfg.For<ConfigurationPropertyHolder>().Singleton().Use(configuration_property_holder);
-                                            cfg.For<FileSystemAccess>().Singleton().Use<WindowsFileSystemAccess>();
+                                            cfg.For<FileSystemAccess>().Singleton().Use(context => new DotNetFileSystemAccess(configuration_property_holder));
                                             cfg.For<Database>().Singleton().Use(context => DatabaseBuilder.build(context.GetInstance<FileSystemAccess>(), configuration_property_holder));
                                             cfg.For<KnownFolders>().Singleton().Use(context => KnownFoldersBuilder.build(context.GetInstance<FileSystemAccess>(), configuration_property_holder));
                                             cfg.For<LogFactory>().Singleton().Use<MultipleLoggerLogFactory>();
@@ -179,17 +183,18 @@ namespace roundhouse.infrastructure.app
                                             cfg.For<DatabaseMigrator>().Singleton().Use(context => new DefaultDatabaseMigrator(context.GetInstance<Database>(), context.GetInstance<CryptographicService>(), configuration_property_holder));
                                             cfg.For<VersionResolver>().Singleton().Use(
                                                 context => VersionResolverBuilder.build(context.GetInstance<FileSystemAccess>(), configuration_property_holder));
-                                            cfg.For<Environment>().Singleton().Use(new DefaultEnvironment(configuration_property_holder));
+                                            cfg.For<EnvironmentSet>().Singleton().Use(new DefaultEnvironmentSet(configuration_property_holder));
+                                            cfg.For<Initializer>().Singleton().Use<FileSystemInitializer>();
                                         });
 
             // forcing a build of database to initialize connections so we can be sure server/database have values
-            Database database = ObjectFactory.GetInstance<Database>();
+            Database database = container.GetInstance<Database>();
             database.initialize_connections(configuration_property_holder);
             configuration_property_holder.ServerName = database.server_name;
             configuration_property_holder.DatabaseName = database.database_name;
             configuration_property_holder.ConnectionString = database.connection_string;
 
-            return new StructureMapContainer(ObjectFactory.Container);
+            return new StructureMapContainer(container);
         }
 
         private static Logger GetMultiLogger(ConfigurationPropertyHolder configuration_property_holder)
@@ -219,6 +224,23 @@ namespace roundhouse.infrastructure.app
             var known_folders = Container.get_an_instance_of<KnownFolders>();
 
             Log4NetAppender.set_file_appender(known_folders.change_drop.folder_full_path);
+        }
+
+        private static void set_logging_level_debug_when_debug(ConfigurationPropertyHolder configuration_property_holder)
+        {
+            if (configuration_property_holder.Debug)
+            {
+                ILoggerRepository log_repository = LogManager.GetRepository(Assembly.GetCallingAssembly());
+                log_repository.Threshold = Level.Debug;
+                foreach (log4net.Core.ILogger log in log_repository.GetCurrentLoggers())
+                {
+                    var logger = log as log4net.Repository.Hierarchy.Logger;
+                    if (logger != null)
+                    {
+                        logger.Level = Level.Debug;
+                    }
+                }
+            }
         }
     }
 }

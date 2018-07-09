@@ -11,9 +11,12 @@ namespace roundhouse.folders
         MigrationsFolder functions { get; }
         MigrationsFolder views { get; }
         MigrationsFolder sprocs { get; }
+        MigrationsFolder triggers { get; }
         MigrationsFolder indexes { get; }
         MigrationsFolder run_after_other_any_time_scripts { get; }
         MigrationsFolder permissions { get; }
+        MigrationsFolder before_migration { get; }
+        MigrationsFolder after_migration { get; }
         Folder change_drop { get; }
     }
 }

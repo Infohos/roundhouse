@@ -12,9 +12,12 @@ namespace roundhouse.folders
                                    MigrationsFolder functions,
                                    MigrationsFolder views,
                                    MigrationsFolder sprocs,
+                                   MigrationsFolder triggers,
                                    MigrationsFolder indexes,
                                    MigrationsFolder runAfterOtherAnyTimeScripts,        
                                    MigrationsFolder permissions,
+                                   MigrationsFolder before_migration,
+                                   MigrationsFolder after_migration,
                                    Folder change_drop
             )
         {
@@ -27,10 +30,13 @@ namespace roundhouse.folders
             this.functions = functions;
             this.views = views;
             this.sprocs = sprocs;
+            this.triggers = triggers;
             this.indexes = indexes;
             this.run_after_other_any_time_scripts = runAfterOtherAnyTimeScripts;
             this.permissions = permissions;
             this.change_drop = change_drop;
+            this.before_migration = before_migration;
+            this.after_migration = after_migration;
         }
 
         public MigrationsFolder alter_database { get; private set; }
@@ -42,10 +48,13 @@ namespace roundhouse.folders
         public MigrationsFolder functions { get; private set; }
         public MigrationsFolder views { get; private set; }
         public MigrationsFolder sprocs { get; private set; }
+        public MigrationsFolder triggers { get; private set; }
         public MigrationsFolder indexes { get; private set; }
         public MigrationsFolder run_after_other_any_time_scripts { get; private set; }
         public MigrationsFolder permissions { get; private set; }
-        
+        public MigrationsFolder before_migration { get; private set; }
+        public MigrationsFolder after_migration { get; private set; }
+
         public Folder change_drop{get; private set;}
        
     }

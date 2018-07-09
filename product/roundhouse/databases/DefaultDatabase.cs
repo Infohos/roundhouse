@@ -3,9 +3,12 @@ namespace roundhouse.databases
     using System;
     using System.Collections.Generic;
     using System.Data;
+    using System.Linq;
+    using Microsoft.Practices.EnterpriseLibrary.TransientFaultHandling;
     using connections;
     using infrastructure.app;
     using infrastructure.app.tokens;
+    using infrastructure.extensions;
     using infrastructure.logging;
     using infrastructure.persistence;
     using model;
@@ -20,6 +23,8 @@ namespace roundhouse.databases
 
     public abstract class DefaultDatabase<DBCONNECTION> : Database
     {
+        protected RetryPolicy retry_policy = RetryPolicy.NoRetry;
+
         public ConfigurationPropertyHolder configuration { get; set; }
         public string server_name { get; set; }
         public string database_name { get; set; }
@@ -36,7 +41,7 @@ namespace roundhouse.databases
 
         public virtual string sql_statement_separator_regex_pattern
         {
-            get { return @"(?<KEEP1>^(?:[\s\t])*(?:-{2}).*$)|(?<KEEP1>/{1}\*{1}[\S\s]*?\*{1}/{1})|(?<KEEP1>'{1}(?:[^']|\n[^'])*?'{1})|(?<KEEP1>\s)(?<BATCHSPLITTER>\;)(?<KEEP2>\s)|(?<KEEP1>\s)(?<BATCHSPLITTER>\;)(?<KEEP2>$)"; }
+            get { return @"(?<KEEP1>^(?:[\s\t])*(?:-{2}).*$)|(?<KEEP1>/{1}\*{1}[\S\s]*?\*{1}/{1})|(?<KEEP1>'{1}(?:[^']|\n[^'])*?'{1})|(?<KEEP1>^|\s)(?<BATCHSPLITTER>\;)(?<KEEP2>\s|$)"; }
         }
 
         public int command_timeout { get; set; }
@@ -59,6 +64,7 @@ namespace roundhouse.databases
         protected IConnection<DBCONNECTION> admin_connection;
 
         private bool disposing;
+        private Dictionary<string, ScriptsRun> scripts_cache;
 
         //this method must set the provider
         public abstract void initialize_connections(ConfigurationPropertyHolder configuration_property_holder);
@@ -122,7 +128,7 @@ namespace roundhouse.databases
             {
                 Log.bound_to(this).log_a_warning_event_containing(
                     "{0} with provider {1} does not provide a facility for creating a database at this time.{2}{3}",
-                    GetType(), provider, Environment.NewLine, ex.Message);
+                    GetType(), provider, Environment.NewLine, ex.to_string());
             }
 
             return database_was_created;
@@ -167,9 +173,9 @@ namespace roundhouse.databases
             try
             {
                 int current_connection_timeout = command_timeout;
-                command_timeout = restore_timeout;
+                admin_command_timeout = restore_timeout;
                 run_sql(restore_database_script(restore_from_path, custom_restore_options), ConnectionType.Admin);
-                command_timeout = current_connection_timeout;
+                admin_command_timeout = current_connection_timeout;
             }
             catch (Exception ex)
             {
@@ -215,9 +221,10 @@ namespace roundhouse.databases
         }
 
         protected abstract void run_sql(string sql_to_run, ConnectionType connection_type, IList<IParameter<IDbDataParameter>> parameters);
+
         protected abstract object run_sql_scalar(string sql_to_run, ConnectionType connection_type, IList<IParameter<IDbDataParameter>> parameters);
 
-        public void insert_script_run(string script_name, string sql_to_run, string sql_to_run_hash, bool run_this_script_once, long version_id)
+        public virtual void insert_script_run(string script_name, string sql_to_run, string sql_to_run_hash, bool run_this_script_once, long version_id)
         {
             ScriptsRun script_run = new ScriptsRun
                                         {
@@ -230,7 +237,7 @@ namespace roundhouse.databases
 
             try
             {
-                repository.save_or_update(script_run);
+                retry_policy.ExecuteAction(() => repository.save_or_update(script_run));
             }
             catch (Exception ex)
             {
@@ -241,7 +248,7 @@ namespace roundhouse.databases
             }
         }
 
-        public void insert_script_run_error(string script_name, string sql_to_run, string sql_erroneous_part, string error_message, string repository_version,
+        public virtual void insert_script_run_error(string script_name, string sql_to_run, string sql_erroneous_part, string error_message, string repository_version,
                                             string repository_path)
         {
             ScriptsRunError script_run_error = new ScriptsRunError
@@ -256,7 +263,7 @@ namespace roundhouse.databases
 
             try
             {
-                repository.save_or_update(script_run_error);
+                retry_policy.ExecuteAction(() => repository.save_or_update(script_run_error));
             }
             catch (Exception ex)
             {
@@ -267,27 +274,29 @@ namespace roundhouse.databases
             }
         }
 
-        public string get_version(string repository_path)
+        public virtual string get_version(string repository_path)
         {
             string version = "0";
 
-            DetachedCriteria crit = DetachedCriteria.For<Version>()
-                .Add(Restrictions.Eq("repository_path", repository_path ?? string.Empty))
-                .AddOrder(Order.Desc("entry_date"))
-                .SetMaxResults(1);
+            QueryOver<Version> crit = QueryOver.Of<Version>()
+                .Where(x => x.repository_path == (repository_path ?? string.Empty))
+                .OrderBy(x => x.entry_date).Desc
+                .Take(1);
 
+            IList<Version> items = null;
             try
             {
-                IList<Version> items = repository.get_with_criteria<Version>(crit);
-                if (items != null && items.Count > 0)
-                {
-                    version = items[0].version;
-                }
+                items = retry_policy.ExecuteAction(() => repository.get_with_criteria(crit));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                Log.bound_to(this).log_a_warning_event_containing("{0} with provider {1} does not provide a facility for retrieving versions at this time.",
-                                                                  GetType(), provider);
+                Log.bound_to(this).log_a_warning_event_containing("{0} with provider {1} does not provide a facility for retrieving versions at this time.{2}{3}",
+                                                                  GetType(), provider, Environment.NewLine, ex.to_string());
+            }
+
+            if (items != null && items.Count > 0)
+            {
+                version = items[0].version;
             }
 
             return version;
@@ -306,7 +315,7 @@ namespace roundhouse.databases
 
             try
             {
-                repository.save_or_update(version);
+                retry_policy.ExecuteAction(() => repository.save_or_update(version));
                 version_id = version.id;
             }
             catch (Exception ex)
@@ -319,63 +328,53 @@ namespace roundhouse.databases
             return version_id;
         }
 
-        public string get_current_script_hash(string script_name)
+        public virtual string get_current_script_hash(string script_name)
         {
-            string hash = string.Empty;
+            ScriptsRun script = get_from_script_cache(script_name) ?? get_script_run(script_name);
+            return script != null ? script.text_hash : string.Empty;
+        }
 
-            DetachedCriteria crit = DetachedCriteria.For<ScriptsRun>()
-                .Add(Restrictions.Eq("script_name", script_name))
-                .AddOrder(Order.Desc("id"))
-                .SetMaxResults(1);
+        public virtual bool has_run_script_already(string script_name)
+        {
+            ScriptsRun script = get_from_script_cache(script_name) ?? get_script_run(script_name);
+            return script != null;
+        }
 
+        protected IList<ScriptsRun> get_all_scripts()
+        {
+            return retry_policy.ExecuteAction(() => repository.get_all<ScriptsRun>());
+        }
+
+        protected ScriptsRun get_script_run(string script_name)
+        {
+            QueryOver<ScriptsRun> criteria = QueryOver.Of<ScriptsRun>()
+                .Where(x => x.script_name == script_name)
+                .OrderBy(x => x.id).Desc
+                .Take(1);
+
+            ScriptsRun script = null;
+            IList<ScriptsRun> found_items;
             try
             {
-                IList<ScriptsRun> items = repository.get_with_criteria<ScriptsRun>(crit);
-                if (items != null && items.Count > 0)
-                {
-                    hash = items[0].text_hash;
-                }
+                found_items = retry_policy.ExecuteAction(() => repository.get_with_criteria(criteria));
             }
             catch (Exception ex)
             {
                 Log.bound_to(this).log_an_error_event_containing(
-                    "{0} with provider {1} does not provide a facility for hashing (through recording scripts run) at this time.{2}{3}",
-                    GetType(), provider, Environment.NewLine, ex.Message);
+                    "{0} with provider {1} does not provide a facility for recording scripts run this time.{2}{3}",
+                    GetType(), provider, Environment.NewLine, ex.to_string());
                 throw;
             }
 
-            return hash;
-        }
-
-        public bool has_run_script_already(string script_name)
-        {
-            bool script_has_run = false;
-
-            DetachedCriteria crit = DetachedCriteria.For<ScriptsRun>()
-                .Add(Restrictions.Eq("script_name", script_name))
-                .AddOrder(Order.Desc("id"))
-                .SetMaxResults(1);
-
-            try
+            if (found_items != null && found_items.Count > 0)
             {
-                IList<ScriptsRun> items = repository.get_with_criteria<ScriptsRun>(crit);
-                if (items != null && items.Count > 0)
-                {
-                    script_has_run = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.bound_to(this).log_an_error_event_containing(
-                    "{0} with provider {1} does not provide a facility for determining if a script has run at this time.{2}{3}",
-                    GetType(), provider, Environment.NewLine, ex.Message);
-                throw;
+                script = found_items[0];
             }
 
-            return script_has_run;
+            return script;
         }
 
-        public void Dispose()
+        public virtual void Dispose()
         {
             if (!disposing)
             {
@@ -402,6 +401,35 @@ namespace roundhouse.databases
                 }
 
                 connection.Dispose();
+            }
+        }
+
+        private ScriptsRun get_from_script_cache(string script_name)
+        {
+            ensure_script_cache();
+
+            ScriptsRun script;
+            if (scripts_cache.TryGetValue(script_name, out script))
+            {
+                return script;
+            }
+
+            return null;
+        }
+
+        private void ensure_script_cache()
+        {
+            if (scripts_cache != null)
+            {
+                return;
+            }
+
+            scripts_cache = new Dictionary<string, ScriptsRun>();
+
+            // latest id overrides possible old one, just like in queries searching for scripts
+            foreach (var script in get_all_scripts().OrderBy(x => x.id))
+            {
+                scripts_cache[script.script_name] = script;
             }
         }
     }

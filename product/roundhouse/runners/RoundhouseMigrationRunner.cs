@@ -11,12 +11,12 @@ namespace roundhouse.runners
     using infrastructure.logging;
     using migrators;
     using resolvers;
-    using Environment = environments.Environment;
+    using roundhouse.environments;
 
     public sealed class RoundhouseMigrationRunner : IRunner
     {
         private readonly string repository_path;
-        private readonly Environment environment;
+        private readonly EnvironmentSet environment_set;
         private readonly KnownFolders known_folders;
         private readonly FileSystemAccess file_system;
         public DatabaseMigrator database_migrator { get; private set; }
@@ -25,13 +25,12 @@ namespace roundhouse.runners
         public bool dropping_the_database { get; set; }
         private readonly bool dont_create_the_database;
         private bool run_in_a_transaction;
-        private readonly bool use_simple_recovery;
         private readonly ConfigurationPropertyHolder configuration;
         private const string SQL_EXTENSION = "*.sql"; // todo: should be made configurable, so that *.raven files are also accepted
 
         public RoundhouseMigrationRunner(
             string repository_path,
-            Environment environment,
+            EnvironmentSet environment_set,
             KnownFolders known_folders,
             FileSystemAccess file_system,
             DatabaseMigrator database_migrator,
@@ -40,12 +39,11 @@ namespace roundhouse.runners
             bool dropping_the_database,
             bool dont_create_the_database,
             bool run_in_a_transaction,
-            bool use_simple_recovery,
             ConfigurationPropertyHolder configuration)
         {
             this.known_folders = known_folders;
             this.repository_path = repository_path;
-            this.environment = environment;
+            this.environment_set = environment_set;
             this.file_system = file_system;
             this.database_migrator = database_migrator;
             this.version_resolver = version_resolver;
@@ -53,7 +51,6 @@ namespace roundhouse.runners
             this.dropping_the_database = dropping_the_database;
             this.dont_create_the_database = dont_create_the_database;
             this.run_in_a_transaction = run_in_a_transaction;
-            this.use_simple_recovery = use_simple_recovery;
             this.configuration = configuration;
         }
 
@@ -76,7 +73,7 @@ namespace roundhouse.runners
 
             if (run_in_a_transaction && !database_migrator.database.supports_ddl_transactions)
             {
-                Log.bound_to(this).log_a_warning_event_containing("You asked to run in a transaction, but this dabasetype doesn't support DDL transactions.");
+                Log.bound_to(this).log_a_warning_event_containing("You asked to run in a transaction, but this databasetype doesn't support DDL transactions.");
                 if (!silent)
                 {
                     Log.bound_to(this).log_an_info_event_containing("Please press enter to continue without transaction support...");
@@ -111,8 +108,7 @@ namespace roundhouse.runners
                     {
                         database_migrator.set_recovery_mode(configuration.RecoveryMode == RecoveryMode.Simple);
                     }
-
-
+                    
                     database_migrator.open_connection(run_in_a_transaction);
                     Log.bound_to(this).log_an_info_event_containing("{0}", "=".PadRight(50, '='));
                     Log.bound_to(this).log_an_info_event_containing("RoundhousE Structure");
@@ -131,9 +127,14 @@ namespace roundhouse.runners
                     Log.bound_to(this).log_an_info_event_containing("Migration Scripts");
                     Log.bound_to(this).log_an_info_event_containing("{0}", "=".PadRight(50, '='));
 
-                    database_migrator.open_admin_connection();
-                    log_and_traverse(known_folders.alter_database, version_id, new_version, ConnectionType.Admin);
-                    database_migrator.close_admin_connection();
+                    run_out_side_of_transaction_folder(known_folders.before_migration, version_id, new_version);
+
+                    if (!configuration.DoNotAlterDatabase)
+                    {
+                        database_migrator.open_admin_connection();
+                        log_and_traverse(known_folders.alter_database, version_id, new_version, ConnectionType.Admin);
+                        database_migrator.close_admin_connection();
+                    }
 
                     if (database_was_created)
                     {
@@ -153,6 +154,7 @@ namespace roundhouse.runners
                     log_and_traverse(known_folders.functions, version_id, new_version, ConnectionType.Default);
                     log_and_traverse(known_folders.views, version_id, new_version, ConnectionType.Default);
                     log_and_traverse(known_folders.sprocs, version_id, new_version, ConnectionType.Default);
+                    log_and_traverse(known_folders.triggers, version_id, new_version, ConnectionType.Default);
                     log_and_traverse(known_folders.indexes, version_id, new_version, ConnectionType.Default);
                     log_and_traverse(known_folders.run_after_other_any_time_scripts, version_id, new_version, ConnectionType.Default);
 
@@ -162,6 +164,7 @@ namespace roundhouse.runners
                         database_migrator.open_connection(false);
                     }
                     log_and_traverse(known_folders.permissions, version_id, new_version, ConnectionType.Default);
+                    run_out_side_of_transaction_folder(known_folders.after_migration, version_id, new_version);
 
                     Log.bound_to(this).log_an_info_event_containing(
                         "{0}{0}{1} v{2} has kicked your database ({3})! You are now at version {4}. All changes and backups can be found at \"{5}\".",
@@ -216,7 +219,27 @@ namespace roundhouse.runners
                                                             folder.should_run_items_in_folder_every_time ? " These scripts will run every time" : string.Empty);
 
             Log.bound_to(this).log_an_info_event_containing("{0}", "-".PadRight(50, '-'));
-            traverse_files_and_run_sql(folder.folder_full_path, version_id, folder, environment, new_version, connection_type);
+            traverse_files_and_run_sql(folder.folder_full_path, version_id, folder, environment_set, new_version, connection_type);
+        }
+
+        public void run_out_side_of_transaction_folder(MigrationsFolder folder, long version_id, string new_version)
+        {
+            if (!string.IsNullOrEmpty(folder.folder_name))
+            {
+                if (run_in_a_transaction)
+                {
+                    database_migrator.close_connection();
+                    database_migrator.open_connection(false);
+                }
+
+                log_and_traverse(folder, version_id, new_version, ConnectionType.Default);
+
+                if (run_in_a_transaction)
+                {
+                    database_migrator.close_connection();
+                    database_migrator.open_connection(run_in_a_transaction);
+                }
+            }
         }
 
         private string get_custom_create_database_script()
@@ -252,7 +275,7 @@ namespace roundhouse.runners
 
         //todo:down story
 
-        public void traverse_files_and_run_sql(string directory, long version_id, MigrationsFolder migration_folder, Environment migrating_environment,
+        public void traverse_files_and_run_sql(string directory, long version_id, MigrationsFolder migration_folder, EnvironmentSet migrating_environment_set,
                                                string repository_version, ConnectionType connection_type)
         {
             if (!file_system.directory_exists(directory)) return;
@@ -267,7 +290,7 @@ namespace roundhouse.runners
                 bool the_sql_ran = database_migrator.run_sql(sql_file_text, file_system.get_file_name_from(sql_file),
                                                              migration_folder.should_run_items_in_folder_once,
                                                              migration_folder.should_run_items_in_folder_every_time,
-                                                             version_id, migrating_environment, repository_version, repository_path, connection_type);
+                                                             version_id, migrating_environment_set, repository_version, repository_path, connection_type);
                 if (the_sql_ran)
                 {
                     try
@@ -285,7 +308,7 @@ namespace roundhouse.runners
             if (configuration.SearchAllSubdirectoriesInsteadOfTraverse) return;
             foreach (string child_directory in file_system.get_all_directory_name_strings_in(directory))
             {
-                traverse_files_and_run_sql(child_directory, version_id, migration_folder, migrating_environment, repository_version, connection_type);
+                traverse_files_and_run_sql(child_directory, version_id, migration_folder, migrating_environment_set, repository_version, connection_type);
             }
         }
 
@@ -294,7 +317,7 @@ namespace roundhouse.runners
             return file_system.read_file_text(file_location);
         }
 
-        private string replace_tokens(string sql_text)
+        public string replace_tokens(string sql_text)
         {
             if (configuration.DisableTokenReplacement)
             {

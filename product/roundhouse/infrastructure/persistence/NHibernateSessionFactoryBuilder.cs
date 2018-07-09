@@ -2,6 +2,7 @@ namespace roundhouse.infrastructure.persistence
 {
     using System;
     using System.Collections.Generic;
+    using System.Globalization;
     using System.Reflection;
     using app;
     using FluentNHibernate.Cfg;
@@ -11,7 +12,6 @@ namespace roundhouse.infrastructure.persistence
     using NHibernate;
     using NHibernate.Cfg;
     using NHibernate.Event;
-    using Environment = NHibernate.Cfg.Environment;
 
     public class NHibernateSessionFactoryBuilder
     {
@@ -27,6 +27,8 @@ namespace roundhouse.infrastructure.persistence
                                 () => MsSqlConfiguration.MsSql2005.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.sqlserver2000.SqlServerDatabase, roundhouse.databases.sqlserver2000",
                                 () => MsSqlConfiguration.MsSql2000.ConnectionString(configuration_holder.ConnectionString));
+            func_dictionary.Add("roundhouse.databases.sqlserverce.SqlServerCEDatabase, roundhouse.databases.sqlserverce",
+                                () => MsSqlCeConfiguration.Standard.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.mysql.MySqlDatabase, roundhouse.databases.mysql",
                                 () => MySQLConfiguration.Standard.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.oracle.OracleDatabase, roundhouse.databases.oracle",
@@ -44,6 +46,8 @@ namespace roundhouse.infrastructure.persistence
                                 () => MsSqlConfiguration.MsSql2005.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.sqlserver2000.SqlServerDatabase, " + merged_assembly_name,
                                 () => MsSqlConfiguration.MsSql2000.ConnectionString(configuration_holder.ConnectionString));
+            func_dictionary.Add("roundhouse.databases.sqlserverce.SqlServerCEDatabase, " + merged_assembly_name,
+                                () => MsSqlCeConfiguration.Standard.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.mysql.MySqlDatabase, " + merged_assembly_name,
                                 () => MySQLConfiguration.Standard.ConnectionString(configuration_holder.ConnectionString));
             func_dictionary.Add("roundhouse.databases.oracle.OracleDatabase, " + merged_assembly_name,
@@ -106,6 +110,7 @@ namespace roundhouse.infrastructure.persistence
 
                     cfg.SetListener(ListenerType.PreInsert, new AuditEventListener());
                     cfg.SetListener(ListenerType.PreUpdate, new AuditEventListener());
+                    cfg.SetProperty("command_timeout", TimeSpan.FromMinutes(5).TotalSeconds.ToString(CultureInfo.InvariantCulture));
                 })
                 .ExposeConfiguration(additional_function);
 

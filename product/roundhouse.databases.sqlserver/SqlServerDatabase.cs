@@ -1,59 +1,53 @@
-using System.Data.SqlClient;
-
 namespace roundhouse.databases.sqlserver
 {
     using System;
     using System.Data;
+    using System.Data.SqlClient;
     using System.Text;
     using System.Text.RegularExpressions;
+    using Microsoft.Practices.EnterpriseLibrary.TransientFaultHandling;
+
     using infrastructure.app;
+    using connections;
     using infrastructure.extensions;
     using infrastructure.logging;
 
     public class SqlServerDatabase : AdoNetDatabase
     {
-        private string connect_options = "Integrated Security";
+        public SqlServerDatabase()
+        {
+            // Retry upto 5 times with exponential backoff before giving up
+            retry_policy = new RetryPolicy(
+                new TransientErrorDetectionStrategy(),
+                5,
+                minBackoff: TimeSpan.FromSeconds(5),
+                maxBackoff: TimeSpan.FromMinutes(2),
+                deltaBackoff: TimeSpan.FromSeconds(5));
+
+            retry_policy.Retrying += (sender, args) => log_command_retrying(args);
+        }
+
+        private string connect_options = "Integrated Security=SSPI;";
 
         public override string sql_statement_separator_regex_pattern
         {
-            get { return @"(?<KEEP1>^(?:[\s\t])*(?:-{2}).*$)|(?<KEEP1>/{1}\*{1}[\S\s]*?\*{1}/{1})|(?<KEEP1>'{1}(?:[^']|\n[^'])*?'{1})|(?<KEEP1>\s)(?<BATCHSPLITTER>GO)(?<KEEP2>\s)|(?<KEEP1>\s)(?<BATCHSPLITTER>GO)(?<KEEP2>$)"; }
+            get
+            {
+                const string strings = @"(?<KEEP1>'[^']*')";
+                const string dashComments = @"(?<KEEP1>--.*$)";
+                const string starComments = @"(?<KEEP1>/\*[\S\s]*?\*/)";
+                const string separator = @"(?<KEEP1>^|\s)(?<BATCHSPLITTER>GO)(?<KEEP2>\s|$)";
+                return strings + "|" + dashComments + "|" + starComments + "|" + separator;
+            }
         }
 
         public override void initialize_connections(ConfigurationPropertyHolder configuration_property_holder)
         {
             if (!string.IsNullOrEmpty(connection_string))
             {
-                string[] parts = connection_string.Split(';');
-                foreach (string part in parts)
-                {
-                    if (string.IsNullOrEmpty(server_name) && (part.to_lower().Contains("server") || part.to_lower().Contains("data source")))
-                    {
-                        server_name = part.Substring(part.IndexOf("=") + 1);
-                    }
-
-                    if (string.IsNullOrEmpty(database_name) && (part.to_lower().Contains("initial catalog") || part.to_lower().Contains("database")))
-                    {
-                        database_name = part.Substring(part.IndexOf("=") + 1);
-                    }
-                }
-
-                if (!connection_string.to_lower().Contains(connect_options.to_lower()))
-                {
-                    connect_options = string.Empty;
-                    foreach (string part in parts)
-                    {
-                        if (!part.to_lower().Contains("server") && !part.to_lower().Contains("data source") && !part.to_lower().Contains("initial catalog") &&
-                            !part.to_lower().Contains("database"))
-                        {
-                            connect_options += part + ";";
-                        }
-                    }
-                }
-            }
-
-            if (connect_options == "Integrated Security")
-            {
-                connect_options = "Integrated Security=SSPI;";
+                var connection_string_builder = new SqlConnectionStringBuilder(connection_string);
+                server_name = connection_string_builder.DataSource;
+                database_name = connection_string_builder.InitialCatalog;
             }
 
             if (string.IsNullOrEmpty(connection_string))
@@ -81,9 +75,25 @@ namespace roundhouse.databases.sqlserver
             return string.Format("data source={0};initial catalog={1};{2}", server_name, database_name, connection_options);
         }
 
+        protected override AdoNetConnection GetAdoNetConnection(string conn_string)
+        {
+            var connection_retry_policy = new RetryPolicy<TransientErrorDetectionStrategy>(
+                5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            connection_retry_policy.Retrying += (sender, args) => log_connection_retrying(args);
+
+            // Command retry policy is only used when ReliableSqlConnection.ExecuteCommand helper methods are explicitly invoked.
+            // This is not our case, as those method are not used.
+            var command_retry_policy = RetryPolicy.NoRetry;
+
+            var connection = new ReliableSqlConnection(conn_string, connection_retry_policy, command_retry_policy);
+
+            connection_specific_setup(connection);
+            return new AdoNetConnection(connection);
+        }
+
         protected override void connection_specific_setup(IDbConnection connection)
         {
-            ((SqlConnection)connection).InfoMessage += (sender, e) => Log.bound_to(this).log_an_info_event_containing("  [SQL PRINT]: {0}{1}", Environment.NewLine, e.Message);
+            ((ReliableSqlConnection)connection).Current.InfoMessage += (sender, e) => Log.bound_to(this).log_a_debug_event_containing("  [SQL PRINT]: {0}{1}", Environment.NewLine, e.Message);
         }
 
         public override void run_database_specific_tasks()
@@ -101,6 +111,7 @@ namespace roundhouse.databases.sqlserver
             {
                 run_sql(create_roundhouse_schema_script(),ConnectionType.Default);
             }
+#pragma warning disable 168
             catch (Exception ex)
             {
                 throw;
@@ -108,6 +119,7 @@ namespace roundhouse.databases.sqlserver
                 //    "Either the schema has already been created OR {0} with provider {1} does not provide a facility for creating roundhouse schema at this time.{2}{3}",
                 //    GetType(), provider, Environment.NewLine, ex.Message);
             }
+#pragma warning restore 168
         }
 
         public string create_roundhouse_schema_script()
@@ -198,15 +210,20 @@ namespace roundhouse.databases.sqlserver
         public override string delete_database_script()
         {
             return string.Format(
-                @"USE master 
-                        IF EXISTS(SELECT * FROM sys.databases WHERE [name] = '{0}' AND source_database_id is NULL) 
-                        BEGIN 
+                @"USE master
+                        DECLARE @azure_engine INT = 5
+                        IF EXISTS(SELECT * FROM sys.databases WHERE [name] = '{0}' AND source_database_id is NULL) AND ISNULL(SERVERPROPERTY('EngineEdition'), 0) <> @azure_engine
+                        BEGIN
                             ALTER DATABASE [{0}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE
                         END
 
                         IF EXISTS(SELECT * FROM sys.databases WHERE [name] = '{0}') 
                         BEGIN
-                            EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = '{0}' 
+                            IF ISNULL(SERVERPROPERTY('EngineEdition'), 0) <> @azure_engine
+                            BEGIN
+                                EXEC sp_executesql N'EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = ''{0}'''
+                            END
+
                             DROP DATABASE [{0}] 
                         END",
                 database_name);
@@ -235,6 +252,23 @@ namespace roundhouse.databases.sqlserver
 
             return result.Tables.Count == 0 ? null : result.Tables[0];
         }
+        
+        private void log_connection_retrying(RetryingEventArgs args)
+        {
+            Log.bound_to(this).log_a_warning_event_containing(
+                "Failure opening connection, trying again (current retry count:{0}){1}{2}",
+                args.CurrentRetryCount,
+                Environment.NewLine,
+                args.LastException.to_string());
+        }
 
+        private void log_command_retrying(RetryingEventArgs args)
+        {
+            Log.bound_to(this).log_a_warning_event_containing(
+                "Failure executing command, trying again (current retry count:{0}){1}{2}",
+                args.CurrentRetryCount,
+                Environment.NewLine,
+                args.LastException.to_string());
+        }
     }
 }
