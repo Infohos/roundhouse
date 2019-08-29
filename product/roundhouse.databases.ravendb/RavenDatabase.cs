@@ -12,6 +12,10 @@ namespace roundhouse.databases.ravendb
 {
     public class RavenDatabase : Database
     {
+        private const string ScriptsRunPath = "/docs/RoundhousE/ScriptsRun";
+        private const string ScriptsRunErrorPath = "/docs/RoundhousE/ScriptsRunError";
+        private const string VersionsPath = "/docs/RoundhousE/Versions";
+
         public RavenDatabase()
         {
             Serializer = new JsonSerializer();
@@ -48,7 +52,7 @@ namespace roundhouse.databases.ravendb
 
         public string get_identity()
         {
-            string identity_of_updater = WindowsIdentity.GetCurrent() != null ? WindowsIdentity.GetCurrent().Name : string.Empty;
+            var identity_of_updater = WindowsIdentity.GetCurrent() != null ? WindowsIdentity.GetCurrent().Name : string.Empty;
 
             return identity_of_updater;
         }
@@ -132,7 +136,7 @@ namespace roundhouse.databases.ravendb
 
         private void run_command_with(string sql_to_run, ConnectionType connection_type)
         {
-            using (IRavenCommand command = setup_database_command(sql_to_run, connection_type))
+            using (var command = setup_database_command(sql_to_run, connection_type))
             {
                 command.Execute();
                 command.Dispose();
@@ -141,11 +145,11 @@ namespace roundhouse.databases.ravendb
 
         public object run_sql_scalar(string sql_to_run, ConnectionType connection_type)
         {
-            object return_value = new object();
+            var return_value = new object();
 
             if (string.IsNullOrEmpty(sql_to_run)) return return_value;
 
-            using (IRavenCommand command = setup_database_command(sql_to_run, connection_type))
+            using (var command = setup_database_command(sql_to_run, connection_type))
             {
                 return_value = command.Execute();
                 command.Dispose();
@@ -192,18 +196,18 @@ namespace roundhouse.databases.ravendb
             try
             {
 
-                var address = string.Format("/docs/Raven/RoundhousE/ScriptsRun/{0}", script_name);
+                var address = $"{ScriptsRunPath}/{script_name}";
                 var headers = new[] { "Raven-Entity-Name: RoundhousE", "Content-Type: application/json" };
                 var data = Serializer.SerializeObject(script_run);
 
                 // put the document as new root (always last run)
-                using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, address, null, "PUT", headers, data))
+                using (var command = RavenCommand.CreateCommand(connection_string, address, null, "PUT", headers, data))
                 {
                     command.Execute();
                 }
 
                 // put the document with version (history of runs)
-                using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, string.Format("{0}/{1}", address, version_id), null, "PUT", headers, data))
+                using (var command = RavenCommand.CreateCommand(connection_string, $"{address}/{version_id}", null, "PUT", headers, data))
                 {
                     command.Execute();
                 }
@@ -235,10 +239,10 @@ namespace roundhouse.databases.ravendb
 
             try
             {
-                var address = string.Format("/docs/Raven/RoundhousE/ScriptsRunError/{0}/", script_name);
+                var address = $"{ScriptsRunErrorPath}/{script_name}/";
                 var headers = new[] {"Raven-Entity-Name: RoundhousE", "Content-Type: application/json"};
 
-                using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, address, null, "PUT", headers, Serializer.SerializeObject(script_run_error)))
+                using (var command = RavenCommand.CreateCommand(connection_string, address, null, "PUT", headers, Serializer.SerializeObject(script_run_error)))
                 {
                     command.Execute();
                 }
@@ -262,7 +266,7 @@ namespace roundhouse.databases.ravendb
         {
             string versionsJson;
 
-            using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, "/docs/Raven/RoundhousE/Versions", null, "GET", null, null))
+            using (var command = RavenCommand.CreateCommand(connection_string, VersionsPath, null, "GET", null, null))
             {
                 versionsJson = (string) command.Execute();
             }
@@ -276,7 +280,7 @@ namespace roundhouse.databases.ravendb
         {
             var headers = new[] { "Raven-Entity-Name: RoundhousE", "Content-Type: application/json" };
 
-            using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, "/docs/Raven/RoundhousE/Versions", null, "PUT", headers, Serializer.SerializeObject(versions)))
+            using (var command = RavenCommand.CreateCommand(connection_string, VersionsPath, null, "PUT", headers, Serializer.SerializeObject(versions)))
             {
                 command.Execute();
             }
@@ -313,14 +317,14 @@ namespace roundhouse.databases.ravendb
 
         public string get_current_script_hash(string script_name)
         {
-            string hash = string.Empty;
+            var hash = string.Empty;
 
             try
             {
-                var address = string.Format("/docs/Raven/RoundhousE/ScriptsRun/{0}", script_name);
+                var address = $"{ScriptsRunPath}/{script_name}";
                 string scriptsRunJson = null;
 
-                using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, address, null, "GET", null, null))
+                using (var command = RavenCommand.CreateCommand(connection_string, address, null, "GET", null, null))
                 {
                     scriptsRunJson = (string) command.Execute();
                 }
@@ -343,14 +347,14 @@ namespace roundhouse.databases.ravendb
 
         public bool has_run_script_already(string script_name)
         {
-            bool script_has_run = false;
+            var script_has_run = false;
 
             try
             {
-                var address = string.Format("/docs/Raven/RoundhousE/ScriptsRun/{0}", script_name);
+                var address = $"{ScriptsRunPath}/{script_name}";
 
                 // todo: ?metadata-only=true
-                using (IRavenCommand command = RavenCommand.CreateCommand(connection_string, address, null, "GET", null, null))
+                using (var command = RavenCommand.CreateCommand(connection_string, address, null, "GET", null, null))
                 {
                     script_has_run = command.Execute() != null;
                 }
