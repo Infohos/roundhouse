@@ -71,6 +71,7 @@
     <ProjectReference Include="..\roundhouse.databases.mysql\roundhouse.databases.mysql.csproj" ExcludeAssets="All" />
     <ProjectReference Include="..\roundhouse.databases.oracle\roundhouse.databases.oracle.csproj" ExcludeAssets="All" />
     <ProjectReference Include="..\roundhouse.databases.postgresql\roundhouse.databases.postgresql.csproj" ExcludeAssets="All" />
+    <ProjectReference Include="..\roundhouse.databases.ravendb\roundhouse.databases.ravendb.csproj" />
     <ProjectReference Include="..\roundhouse.databases.sqlite\roundhouse.databases.sqlite.csproj" ExcludeAssets="All" />
     <ProjectReference Include="..\roundhouse.databases.sqlserver2000\roundhouse.databases.sqlserver2000.csproj" ExcludeAssets="All" />
     <ProjectReference Include="..\roundhouse.databases.sqlserverce\roundhouse.databases.sqlserverce.csproj" ExcludeAssets="All" />
