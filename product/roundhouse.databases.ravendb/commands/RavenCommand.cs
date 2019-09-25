@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace roundhouse.databases.ravendb.commands
@@ -15,7 +16,8 @@ namespace roundhouse.databases.ravendb.commands
         {
             _webClient = new WebClient
             {
-                UseDefaultCredentials = true
+                UseDefaultCredentials = true,
+                Encoding = Encoding.UTF8
             };
         }
 
